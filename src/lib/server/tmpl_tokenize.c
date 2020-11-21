@@ -2526,6 +2526,8 @@ ssize_t tmpl_afrom_substr(TALLOC_CTX *ctx, tmpl_t **out,
 			return fr_sbuff_set(in, &our_in);
 		}
 
+		if (t_rules->skip_autoparse) goto skip_autoparse;
+
 		/*
 		 *	See if it's a boolean value
 		 */
@@ -2579,6 +2581,8 @@ ssize_t tmpl_afrom_substr(TALLOC_CTX *ctx, tmpl_t **out,
 		 */
 		slen = tmpl_afrom_attr_substr(ctx, NULL, out, &our_in, p_rules, t_rules);
 		if (slen > 0) goto done_bareword;
+
+skip_autoparse:
 
 		vpt = tmpl_alloc_null(ctx);
 
