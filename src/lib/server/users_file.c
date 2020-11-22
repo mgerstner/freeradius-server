@@ -111,18 +111,117 @@ static fr_sbuff_parse_rules_t const rhs_term = {
 };
 
 /*
+ *	Caller saw a $INCLUDE at the start of a line.
+ */
+static int users_include(TALLOC_CTX *ctx, fr_dict_t const *dict, fr_sbuff_t *sbuff, PAIR_LIST **last,
+			 char const *file, int lineno)
+{
+	size_t		len;
+	char		*newfile, *p, c;
+	fr_sbuff_marker_t name;
+
+	*last = NULL;
+	fr_sbuff_advance(sbuff, 8);
+
+	/*
+	 *	Skip spaces after the $INCLUDE.
+	 */
+	if (fr_sbuff_adv_past_allowed(sbuff, SIZE_MAX, sbuff_char_space) == 0) {
+		ERROR("%s[%d]: Unexpected text after $INCLUDE",
+		      file, lineno);
+		return -1;
+	}
+
+	/*
+	 *	Remember when the name started, and skip over the name
+	 *	until spaces, comments, or LF
+	 */
+	fr_sbuff_marker(&name, sbuff);
+	len = fr_sbuff_adv_until(sbuff, SIZE_MAX, &name_terms, 0);
+	if (len == 0) {
+		fr_sbuff_marker_release(&name);
+		ERROR("%s[%d]: No filename after $INCLUDE ",
+		      file, lineno);
+		return -1;
+	}
+
+	/*
+	 *	If the input file is a relative path, try to copy the
+	 *	leading directory from it.  If there's no leading
+	 *	directory, just use the $INCLUDE name as-is.
+	 *
+	 *	If there is a leading directory in the input name,
+	 *	paste that as the directory to the $INCLUDE name.
+	 *
+	 *	Otherwise the $INCLUDE name is an absolute path, use
+	 *	it as -is.
+	 */
+	c = *fr_sbuff_current(&name);
+	if (c != '/') {
+		p = strrchr(file, '/');
+
+		if (!p) goto copy_name;
+
+		newfile = talloc_asprintf(NULL, "%.*s/%.*s",
+					  (int) (p - file), file,
+					  (int) len, fr_sbuff_current(&name));
+	} else {
+	copy_name:
+		newfile = talloc_asprintf(NULL, "%.*s", (int) len, fr_sbuff_current(&name));
+	}
+	fr_sbuff_marker_release(&name);
+
+	/*
+	 *	Skip spaces and comments after the name.
+	 */
+	fr_sbuff_adv_past_allowed(sbuff, SIZE_MAX, sbuff_char_space);
+	if (fr_sbuff_next_if_char(sbuff, '#')) {
+		(void) fr_sbuff_adv_to_chr(sbuff, SIZE_MAX, '\n');
+	}
+
+	/*
+	 *	There's no LF, but if we skip non-spaces and
+	 *	non-comments to find the LF, then there must be extra
+	 *	text after the filename.  That's an error.
+	 *
+	 *	Unless the line has EOF after the filename.  in which
+	 *	case this error will get hit, too.
+	 */
+	if (!fr_sbuff_is_char(sbuff, '\n') &&
+	    (fr_sbuff_adv_to_chr(sbuff, SIZE_MAX, '\n') > 0)) {
+		ERROR("%s[%d]: Unexpected text after filename",
+		      file, lineno);
+		talloc_free(newfile);
+		return -1;
+	}
+
+	/*
+	 *	Read the $INCLUDEd file recursively.
+	 */
+	if (pairlist_read(ctx, dict, newfile, last, 0) != 0) {
+		ERROR("%s[%d]: Could not read included file %s: %s",
+		      file, lineno, newfile, fr_syserror(errno));
+		talloc_free(newfile);
+		return -1;
+	}
+	talloc_free(newfile);
+
+	return 0;
+}
+
+
+/*
  *	Read the users file. Return a PAIR_LIST.
  */
 int pairlist_read(TALLOC_CTX *ctx, fr_dict_t const *dict, char const *file, PAIR_LIST **list, int complain)
 {
-	FILE *fp;
-	char const *p;
-	char *q;
-	PAIR_LIST *pl = NULL;
-	PAIR_LIST **last = &pl;
-	int order = 0;
-	int lineno		= 1;
+	char			*q;
+	PAIR_LIST		*pl = NULL;
+	PAIR_LIST		**last = &pl;
+	int			order = 0;
+	int			lineno		= 1;
 	map_t			**map_tail;
+	FILE			*fp;
 	fr_sbuff_t		sbuff;
 	fr_sbuff_uctx_file_t	fctx;
 	tmpl_rules_t		lhs_rules, rhs_rules;
@@ -167,7 +266,6 @@ int pairlist_read(TALLOC_CTX *ctx, fr_dict_t const *dict, char const *file, PAIR
 	};
 
 	while (true) {
-		unsigned char	c;
 		size_t		len;
 		bool		comma;
 		bool		leading_spaces;
@@ -204,116 +302,29 @@ int pairlist_read(TALLOC_CTX *ctx, fr_dict_t const *dict, char const *file, PAIR
 		 *	$INCLUDE filename
 		 */
 		if (fr_sbuff_is_str(&sbuff, "$INCLUDE", 8)) {
-			char *newfile;
-			fr_sbuff_marker_t name;
-
-			fr_sbuff_advance(&sbuff, 8);
-
-			/*
-			 *	Skip spaces after the $INCLUDE.
-			 */
-			if (fr_sbuff_adv_past_allowed(&sbuff, SIZE_MAX, sbuff_char_space) == 0) {
-				ERROR("%s[%d]: Unexpected text after $INCLUDE",
-				      file, lineno);
-				goto fail;
-			}
-
-			/*
-			 *	Remember when the name started, and
-			 *	skip over the name until spaces, comments, or LF
-			 */
-			fr_sbuff_marker(&name, &sbuff);
-			len = fr_sbuff_adv_until(&sbuff, SIZE_MAX, &name_terms, 0);
-			if (len == 0) {
-				fr_sbuff_marker_release(&name);
-				ERROR("%s[%d]: No filename after $INCLUDE ",
-				      file, lineno);
-				goto fail;
-			}
-
-			/*
-			 *	If the input file is a relative path,
-			 *	try to copy the leading directory from
-			 *	it.  If there's no leading directory,
-			 *	just use the $INCLUDE name as-is.
-			 *
-			 *	If there is a leading directory in the
-			 *	input name, paste that as the
-			 *	directory to the $INCLUDE name.
-			 *
-			 *	Otherwise the $INCLUDE name is an
-			 *	absolute path, use it as -is.
-			 */
-			c = *fr_sbuff_current(&name);
-			if (c != '/') {
-				p = strrchr(file, '/');
-
-				if (!p) goto copy_name;
-
-				newfile = talloc_asprintf(NULL, "%.*s/%.*s",
-							  (int) (p - file), file,
-							  (int) len, fr_sbuff_current(&name));
-			} else {
-			copy_name:
-				newfile = talloc_asprintf(NULL, "%.*s", (int) len, fr_sbuff_current(&name));
-			}
-			fr_sbuff_marker_release(&name);
-
-			/*
-			 *	Skip spaces and comments after the name.
-			 */
-			fr_sbuff_adv_past_allowed(&sbuff, SIZE_MAX, sbuff_char_space);
-			if (fr_sbuff_next_if_char(&sbuff, '#')) {
-				(void) fr_sbuff_adv_to_chr(&sbuff, SIZE_MAX, '\n');
-			}
-
-			/*
-			 *	There's no LF, but if we skip
-			 *	non-spaces and non-comments to find
-			 *	the LF, then there must be extra text
-			 *	after the filename.  That's an error.
-			 */
-			if (!fr_sbuff_is_char(&sbuff, '\n') &&
-			    (fr_sbuff_adv_to_chr(&sbuff, SIZE_MAX, '\n') > 0)) {
-				ERROR("%s[%d]: Unexpected text after filename",
-				      file, lineno);
-				talloc_free(newfile);
-				goto fail;
-			}
-
-			/*
-			 *	Read the $INCLUDEd file recursively.
-			 */
-			if (pairlist_read(ctx, dict, newfile, last, 0) != 0) {
-				ERROR("%s[%d]: Could not read included file %s: %s",
-				      file, lineno, newfile, fr_syserror(errno));
-				talloc_free(newfile);
-				goto fail;
-			}
-			talloc_free(newfile);
+			if (users_include(ctx, dict, &sbuff, &t, file, lineno) < 0) goto fail;
 
 			/*
 			 *	The file may have read no entries, one
 			 *	entry, or it may be a linked list of
 			 *	entries.  Go to the end of the list.
 			 */
+			*last = t;
 			while (*last) {
 				(*last)->order = order++;
 				last = &((*last)->next);
 			}
 
-			/*
-			 *	Go to the next line.
-			 */
 			if (fr_sbuff_next_if_char(&sbuff, '\n')) {
 				lineno++;
 				continue;
 			}
 
 			/*
-			 *	The next character is not LF, but we
-			 *	skipped to LF above.  So, by process
-			 *	of elimination, we must be at EOF.
+			 *	The next character is not LF, but the
+			 *	function skipped to LF.  So, by
+			 *	process of elimination, we must be at
+			 *	EOF.
 			 */
 			break;
 		} /* else it wasn't $INCLUDE */
@@ -343,6 +354,9 @@ check_item:
 		/*
 		 *	Skip spaces before the item, and allow the
 		 *	check list to end on comment or LF.
+		 *
+		 *	Note that we _don't_ call map_afrom_sbuff() to
+		 *	skip spaces, as it will skip LF, too!
 		 */
 		(void) fr_sbuff_adv_past_allowed(&sbuff, SIZE_MAX, sbuff_char_space);
 		if (fr_sbuff_is_char(&sbuff, '#')) goto check_item_comment;
@@ -382,9 +396,6 @@ check_item:
 			 */
 
 		add_entry:
-			return -1;
-
-
 			*last = t;
 			break;
 		}
