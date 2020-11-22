@@ -454,13 +454,15 @@ check_item:
 			goto setup_reply;
 		}
 
-#if 0
-		(fr_sbuff_adv_to_chr(&sbuff, SIZE_MAX, '\n') > 0)) {
+		/*
+		 *	We didn't see SPACE LF or SPACE COMMENT LF.
+		 *	There's something else going on.
+		 */
+		if (fr_sbuff_adv_to_chr(&sbuff, SIZE_MAX, '\n') > 0)) {
 			ERROR("%s[%d]: Unexpected text after check items: %s",
 			      file, lineno, fr_strerror());
 			goto fail_entry;
 		}
-
 
 		/*
 		 *	The next character is not LF, but we
@@ -470,7 +472,6 @@ check_item:
 		if (!fr_sbuff_is_char(&sbuff, '\n')) {
 			goto add_entry;
 		}
-#endif
 
 setup_reply:
 		/*
