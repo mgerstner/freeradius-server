@@ -148,6 +148,14 @@ int pairlist_read(TALLOC_CTX *ctx, fr_dict_t const *dict, char const *file, PAIR
 		.request_def = REQUEST_CURRENT,
 		.prefix = TMPL_ATTR_REF_PREFIX_AUTO,
 		.disallow_qualifiers = true, /* for now, until more tests are made */
+
+		/*
+		 *	Otherwise the tmpl code returns 0 when asked
+		 *	to parse unknown names.  So we say "please
+		 *	parse unknown names as unresolved attributes",
+		 *	and then do a second pass to complain that the
+		 *	thing isn't known.
+		 */
 		.allow_unresolved = true,
 	};
 	rhs_rules = (tmpl_rules_t) {
@@ -164,8 +172,6 @@ int pairlist_read(TALLOC_CTX *ctx, fr_dict_t const *dict, char const *file, PAIR
 		bool		comma;
 		bool		leading_spaces;
 		PAIR_LIST	*t;
-
-		fprintf(stderr, "Entry %.60s\n", fr_sbuff_current(&sbuff));
 
 		/*
 		 *	If the line is empty or has only comments,
@@ -200,8 +206,6 @@ int pairlist_read(TALLOC_CTX *ctx, fr_dict_t const *dict, char const *file, PAIR
 		if (fr_sbuff_is_str(&sbuff, "$INCLUDE", 8)) {
 			char *newfile;
 			fr_sbuff_marker_t name;
-
-			fprintf(stderr, "INCLUDE %.60s\n", fr_sbuff_current(&sbuff));
 
 			fr_sbuff_advance(&sbuff, 8);
 
@@ -335,11 +339,7 @@ int pairlist_read(TALLOC_CTX *ctx, fr_dict_t const *dict, char const *file, PAIR
 		lhs_rules.list_def = PAIR_LIST_CONTROL;
 		comma = false;
 
-		fprintf(stderr, "ALLOC %s %.60s\n", t->name, fr_sbuff_current(&sbuff));
-
 check_item:
-		fprintf(stderr, "CHECK %.60s\n", fr_sbuff_current(&sbuff));
-
 		/*
 		 *	Skip spaces before the item, and allow the
 		 *	check list to end on comment or LF.
@@ -351,7 +351,6 @@ check_item:
 		/*
 		 *	Try to parse the check item.
 		 */
-		fprintf(stderr, "MAP CHECK %.60s\n", fr_sbuff_current(&sbuff));
 		if (map_afrom_sbuff(t, map_tail, &sbuff, cond_cmp_op_table, cond_cmp_op_table_len,
 				    &lhs_rules, &rhs_rules, &rhs_term) < 0) {
 			ERROR("%s[%d]: Failed reading check pair: %s",
@@ -370,7 +369,6 @@ check_item:
 		 *	left is a comma.
 		 */
 		if (!*map_tail) {
-			fprintf(stderr, "no map!\n");
 			if (fr_sbuff_is_char(&sbuff, ',')) {
 				ERROR("%s[%d]: Unexpected extra comma reading check pair",
 				      file, lineno);
@@ -427,11 +425,9 @@ check_item:
 		 *	unknown text.
 		 */
 		if (fr_sbuff_next_if_char(&sbuff, '#')) {
-			fprintf(stderr, "SKIP COMMENT\n");
 			(void) fr_sbuff_adv_to_chr(&sbuff, SIZE_MAX, '\n');
 		}
 	check_item_end:
-		fprintf(stderr, "CHECK LIST END %.60s\n", fr_sbuff_current(&sbuff));
 		if (fr_sbuff_next_if_char(&sbuff, '\n')) {
 			/*
 			 *	The check item list ended with a comma.
@@ -461,14 +457,11 @@ check_item:
 		 *	of elimination, we must be at EOF.
 		 */
 		if (!fr_sbuff_is_char(&sbuff, '\n')) {
-			fprintf(stderr, "ADD %d\n", __LINE__);
 			goto add_entry;
 		}
 #endif
 
 setup_reply:
-		fprintf(stderr, "START REPLY\n");
-
 		/*
 		 *	Setup the reply items.
 		 */
@@ -477,8 +470,6 @@ setup_reply:
 		comma = false;
 
 reply_item:
-		fprintf(stderr, "REPLY %.60s\n", fr_sbuff_current(&sbuff));
-
 		/*
 		 *	Reply items start with spaces.  If there's no
 		 *	spaces, then the current entry is done.  Add
@@ -486,7 +477,6 @@ reply_item:
 		 *	user name or $INCLUDE.
 		 */
 		if (fr_sbuff_adv_past_allowed(&sbuff, SIZE_MAX, sbuff_char_space) == 0) {
-			fprintf(stderr, "no spaces?\n");
 			if (comma) {
 				ERROR("%s[%d]: Unexpected trailing comma in previous line",
 				      file, lineno);
@@ -516,8 +506,6 @@ reply_item:
 		}
 
 next_reply_item:
-		fprintf(stderr, "REPLY NEXT %.60s\n", fr_sbuff_current(&sbuff));
-
 		/*
 		 *	Unlike check items, we don't skip spaces or
 		 *	comments here.
@@ -528,7 +516,6 @@ next_reply_item:
 			      file, lineno, fr_strerror());
 			goto fail;
 		}
-		fprintf(stderr, "MAP SUCCEEDED WITH %p\n", *map_tail);
 
 		/*
 		 *	The map "succeeded", but no map was created.
