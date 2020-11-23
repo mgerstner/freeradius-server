@@ -400,6 +400,8 @@ check_item:
 			break;
 		}
 		fr_assert((*map_tail)->lhs != NULL);
+		fr_assert((*map_tail)->rhs != NULL);
+		fr_assert((*map_tail)->next == NULL);
 
 		if (!tmpl_is_attr((*map_tail)->lhs)) {
 			ERROR("%s[%d]: Unknown attribute '%s'",
@@ -407,9 +409,13 @@ check_item:
 			goto fail_entry;
 		}
 
-		fr_assert((*map_tail)->rhs != NULL);
-		fr_assert(!tmpl_is_attr((*map_tail)->rhs));
-		fr_assert((*map_tail)->next == NULL);
+		if (!tmpl_is_data((*map_tail)->rhs) && !tmpl_is_exec((*map_tail)->rhs)) {
+			ERROR("%s[%d]: Invalid RHS '%s'",
+			      file, lineno, (*map_tail)->rhs->name);
+			goto fail_entry;
+		}
+		
+		map_tail = &(*map_tail)->next;
 
 		/*
 		 *	There can be spaces before any comma.
@@ -422,7 +428,6 @@ check_item:
 		 */
 		if (fr_sbuff_next_if_char(&sbuff, ',')) {
 			comma = true;
-			map_tail = &(*map_tail)->next;
 			goto check_item;
 		}
 		comma = false;
@@ -458,7 +463,7 @@ check_item:
 		 *	We didn't see SPACE LF or SPACE COMMENT LF.
 		 *	There's something else going on.
 		 */
-		if (fr_sbuff_adv_to_chr(&sbuff, SIZE_MAX, '\n') > 0)) {
+		if (fr_sbuff_adv_to_chr(&sbuff, SIZE_MAX, '\n') > 0) {
 			ERROR("%s[%d]: Unexpected text after check items: %s",
 			      file, lineno, fr_strerror());
 			goto fail_entry;
@@ -517,10 +522,24 @@ reply_item:
 			goto fail_entry;
 		}
 
+		/*
+		 *	SPACES COMMENT or SPACES LF means "end of
+		 *	reply item list"
+		 */
+		if (fr_sbuff_is_char(&sbuff, '#')) {
+			(void) fr_sbuff_adv_to_chr(&sbuff, SIZE_MAX, '\n');
+		}
+		if (fr_sbuff_next_if_char(&sbuff, '\n')) {
+			lineno++;
+			goto add_entry;
+		}
+
 next_reply_item:
 		/*
 		 *	Unlike check items, we don't skip spaces or
-		 *	comments here.
+		 *	comments here.  All of the code paths which
+		 *	lead to here have already checked for those
+		 *	cases.
 		 */
 		if (map_afrom_sbuff(t, map_tail, &sbuff, map_assignment_op_table, map_assignment_op_table_len,
 				    &lhs_rules, &rhs_rules, &rhs_term) < 0) {
@@ -548,8 +567,8 @@ next_reply_item:
 				goto fail_entry;
 			}
 
-			if (fr_sbuff_next_if_char(&sbuff, '#')) goto reply_item_comment;
-			if (fr_sbuff_next_if_char(&sbuff, '\n')) goto reply_item_end;
+			if (fr_sbuff_is_char(&sbuff, '#')) goto reply_item_comment;
+			if (fr_sbuff_is_char(&sbuff, '\n')) goto reply_item_end;
 
 			/*
 			 *	We didn't read anything, but none of
@@ -558,15 +577,20 @@ next_reply_item:
 			goto add_entry;
 		}
 		fr_assert((*map_tail)->lhs != NULL);
+		fr_assert((*map_tail)->rhs != NULL);
+		fr_assert((*map_tail)->next == NULL);
+
 		if (!tmpl_is_attr((*map_tail)->lhs)) {
 			ERROR("%s[%d]: Unknown attribute '%s'",
 			      file, lineno, (*map_tail)->lhs->name);
 			goto fail_entry;
 		}
 
-		fr_assert((*map_tail)->rhs != NULL);
-		fr_assert(!tmpl_is_attr((*map_tail)->rhs));
-		fr_assert((*map_tail)->next == NULL);
+		if (tmpl_is_attr((*map_tail)->rhs) || tmpl_is_list((*map_tail)->rhs)){
+			ERROR("%s[%d]: Invalid RHS '%s'",
+			      file, lineno, (*map_tail)->rhs->name);
+			goto fail_entry;
+		}
 
 		map_tail = &(*map_tail)->next;
 
