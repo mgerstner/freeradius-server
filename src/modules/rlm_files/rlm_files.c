@@ -383,7 +383,7 @@ static unlang_action_t file_common(rlm_rcode_t *p_result, rlm_files_t const *ins
 			fr_cursor_tail(&list_cursor);
 		}
 
-		if (paircmp(request, packet->vps, list) != 0) {
+		if (paircmp(request, &packet->vps, &list) != 0) {
 			fr_pair_list_free(&list);
 			continue;
 		}
@@ -411,7 +411,7 @@ static unlang_action_t file_common(rlm_rcode_t *p_result, rlm_files_t const *ins
 					break;
 				}
 
-				radius_pairmove(request, &reply->vps, vp, true);
+				radius_pairmove(request, &reply->vps, &vp, true);
 			}
 		}
 
